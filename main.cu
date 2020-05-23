@@ -8,10 +8,10 @@
 typedef float float_; /*useful for testing float vs double*/
 typedef unsigned int heatmap;
 
-const int width = 500, height = 500;
-const unsigned long long samples = 1000;
-const unsigned long long sampleSamples = 10000;
-
+const int width = 500*2, height = 500*2;
+const unsigned long long samples = 50000;
+const unsigned long long sampleSamples = 2000;
+  
 /*map function*/
 template <typename T>
 __device__ constexpr T map(T x, T in_min, T in_max, T out_min, T out_max) {
@@ -39,11 +39,11 @@ __device__ void mSet(thrust::complex<float_> c, thrust::complex<float_>* Set,
         return;
     }
 
-    auto z = thrust::complex<float_>(0, 0);
+    auto z = thrust::complex<float_>(0,0);
 
     *iterations = 0;
     while (norm(z) <= 5 && *iterations < maxIterations) {
-
+        
         z = z * z + c;
         /*keep track of the orbit of z*/
         Set[*iterations] = z;
@@ -67,10 +67,10 @@ __global__ void generateSamples(thrust::complex<float_>* Set, int* iterations,
         // seed a random number generator
         seed += index;
         curand_init(seed, 0, 0, &realRand);
-        curand_init(curand(&realRand), 0, 0, &imagRand);
+        curand_init(curand(&realRand)*2, 0, 0, &imagRand);
         thrust::complex<float_> c(
-            map<float_t>(curand_uniform(&realRand), 0, 1, minr.real(), minr.imag()),
-            map<float_t>(curand_uniform(&imagRand), 0, 1, mini.real(),
+            map<float_>(curand_uniform(&realRand), 0, 1, minr.real(), minr.imag()),
+            map<float_>(curand_uniform(&imagRand), 0, 1, mini.real(),
                 mini.imag()));
         /*generate points*/
         mSet(c, Set + index * (unsigned long long)maxIterations, iterations + index,
@@ -130,22 +130,22 @@ int getColor(heatmap value, heatmap maxValue) {
 
 int main() {
     /*mapping*/
-    thrust::complex<float_> minr = thrust::complex<float_>(-2.0, .828);
-    thrust::complex<float_> mini = thrust::complex<float_>(-1.414, 1.414);
+    thrust::complex<float_> minr = thrust::complex<float_>(-2.0f, .828f) / 1.15f;
+    thrust::complex<float_> mini = thrust::complex<float_>(-1.414f, 1.414f)/1.15f;
 
     auto t1 = std::chrono::high_resolution_clock::now();
 
     int* iter;
     cudaMallocManaged(&iter, sizeof(int) * 4);
     /*red,        green,        and blue*/
-    iter[0] = 800, iter[1] = 500, iter[2] = 50;
+    iter[0] = 800, iter[1] = 500, iter[2] = 50; 
     /*find the highest max iteration*/
     iter[3] = std::max({ iter[0], iter[1], iter[2] });
     /*allocate memory for heatmap buffer*/
     heatmap* buffer;
+    cudaMallocManaged(&buffer, sizeof(heatmap) * width * height * 3);
     /*allocate memory for storing the highest values in the buffer*/
     heatmap* maxValues;
-    cudaMallocManaged(&buffer, sizeof(heatmap) * width * height * 3);
     cudaMallocManaged(&maxValues, sizeof(heatmap) * 3);
     /*allocate memory for storing the orbits of points that escape*/
     thrust::complex<float_>* Set;
@@ -157,12 +157,13 @@ int main() {
 
     /*sample multiple times*/
     for (int i = 0; i < sampleSamples; ++i) {
-        generateSamples << <samples, 1024 >> > (Set, iterations, iter[3], minr, mini);
+        generateSamples << <(samples+32-1)/32, 32 >> > (Set, iterations, iter[3], minr, mini);
         cudaDeviceSynchronize();
         addToHeatmap << <32, 1024 >> > (buffer, Set, iterations, iter, maxValues, minr,
             mini);
         cudaDeviceSynchronize();
     }
+
 
     /*output image*/
     png::image<png::rgb_pixel> image(width, height);
@@ -185,8 +186,8 @@ int main() {
     double timeTook = duration.count();
     std::cout << "It took " << timeTook
         << ((timeTook == 1.0) ? " second" : "seconds") << "\n";
-
     image.write("output.png");
+    std::cin.get();
     /*free variables*/
     cudaFree(iter);
     cudaFree(buffer);
